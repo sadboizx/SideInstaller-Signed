@@ -1,0 +1,118 @@
+name: sign
+
+# Keeps the signed releases, and the install page built from them, in line with
+# FrizzleM/SideInstaller's releases and the certificate pool (cert-url.txt).
+# Every run is the same command, `python3 -m signer sync`, which works out what
+# is out of date and does only that:
+#
+#   - a release with no signed counterpart yet is signed with every
+#     certificate and published as a release here, under the same tag;
+#   - every certificate on the live releases is checked with Apple (OCSP), and
+#     a status that changed (valid, revoked, expired) is published straight away;
+#   - a certificate new to the pool, or whose p12 or profile changed, is signed
+#     and added to the live releases; one that left the pool is removed.
+#
+# The check job runs on Linux and takes seconds. Only when something needs
+# signing does the macOS job start, and it signs just that, in parallel. The
+# page is redeployed only when something changed.
+#
+# Runs on:
+#   - repository_dispatch `unsigned-release` {"tag": "<tag>"}, which
+#     FrizzleM/SideInstaller's notify-signer sends for every new release
+#     (that tag is re-signed in full);
+#   - a daily schedule, and any push that touches the pool or the signer;
+#   - Run workflow (Actions › sign): blank tag = the live releases; "force"
+#     re-signs every certificate.
+
+on:
+  repository_dispatch:
+    types: [unsigned-release]
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "FrizzleM/SideInstaller release tag to work on, e.g. v1.6.0 (blank = the live stable and beta releases)"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "Re-sign every certificate, not only new and changed ones"
+        required: false
+        default: false
+        type: boolean
+      cert_zip_url:
+        description: "One-off certificate sources instead of cert-url.txt: space-separated .zip URLs, github.com/owner/repo URLs and/or folder paths"
+        required: false
+        default: ""
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "certs/**"
+      - "cert-url.txt"
+      - "signer/**"
+      - ".github/workflows/sign.yml"
+
+# One run at a time. Every run re-reads the releases and the pool, so a run
+# that GitHub drops from the queue in favour of a newer one loses nothing.
+concurrency:
+  group: sign
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  MAIN_REPO: FrizzleM/SideInstaller
+  GH_TOKEN: ${{ github.token }}
+  SIGN_TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+  SIGN_FORCE: ${{ github.event_name == 'repository_dispatch' || inputs.force }}
+  CERT_ZIP_URL: ${{ inputs.cert_zip_url }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  check:
+    name: Check certificates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write   # publish status changes and removals
+    outputs:
+      sign: ${{ steps.sync.outputs.needs_signing }}
+      changed: ${{ steps.sync.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: sync
+        run: python3 -m signer sync --check-only
+
+  sign:
+    name: Sign new certificates
+    needs: check
+    if: needs.check.outputs.sign == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # create releases and upload the signed IPAs
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: sync
+        run: python3 -m signer sync
+
+  pages:
+    name: Deploy the install page
+    needs: [check, sign]
+    if: >-
+      always() && needs.check.result == 'success' &&
+      (needs.check.outputs.changed == 'true' || needs.sign.outputs.changed == 'true')
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy-pages.yml
