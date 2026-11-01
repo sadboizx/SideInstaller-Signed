@@ -58,6 +58,7 @@ permissions:
   contents: read
 
 env:
+  GH_TOKEN: ${{ github.token }}
   SIGN_APP: ${{ inputs.app }}
   SIGN_CERT: ${{ inputs.cert }}
   SIGN_FORCE: ${{ inputs.force }}
