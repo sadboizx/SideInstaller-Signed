@@ -14,9 +14,9 @@ run-name: "sign-all :: ${{ inputs.cert }} :: ${{ inputs.app }}"
 # Layout since 2026-11-02: the signer source lives in the MAIN repo
 # (sadboizx/SideInstaller, private) and is checked out at main-repo/ with
 # the MAIN_REPO_PAT secret; the unsigned IPAs live in THIS repo at
-# public/unsign/ and are copied into main-repo/public/ before each run.
-# The copy keeps the exact bytes, so the signer's sha256 unsigned ids —
-# and therefore its incremental state — are unchanged. Releases still go
+# public/unsign/ and the signer reads them directly via UNSIGNED_DIR
+# (no copy: same bytes, so the signer's sha256 unsigned ids — and
+# therefore its incremental state — are unchanged). Releases still go
 # to this repo, and the site dispatches this workflow exactly as before.
 #
 # Runs on:
@@ -76,6 +76,9 @@ env:
   # package there. cert-url.txt is read from root, i.e. main-repo/.
   MAIN_DIR: ${{ github.workspace }}/main-repo
   PYTHONPATH: ${{ github.workspace }}/main-repo
+  # Local IPA sources resolve to this flat dir by basename
+  # (feather/Feather.ipa -> Feather.ipa); no copy step needed.
+  UNSIGNED_DIR: ${{ github.workspace }}/public/unsign
 
 jobs:
   check:
@@ -97,13 +100,6 @@ jobs:
           token: ${{ secrets.MAIN_REPO_PAT }}
           path: main-repo
           persist-credentials: false
-      - name: Stage unsigned IPAs
-        run: |
-          mkdir -p main-repo/public/feather main-repo/public/Ksign main-repo/public/esign
-          [ -f public/unsign/Feather.ipa ] && cp public/unsign/Feather.ipa main-repo/public/feather/Feather.ipa || true
-          [ -f public/unsign/Ksign.ipa ] && cp public/unsign/Ksign.ipa main-repo/public/Ksign/Ksign.ipa || true
-          [ -f public/unsign/ESign.ipa ] && cp public/unsign/ESign.ipa main-repo/public/esign/ESign.ipa || true
-          ls -l main-repo/public/feather main-repo/public/Ksign main-repo/public/esign
       - id: sync
         run: python3 -m signer sync --check-only
 
@@ -125,11 +121,4 @@ jobs:
           token: ${{ secrets.MAIN_REPO_PAT }}
           path: main-repo
           persist-credentials: false
-      - name: Stage unsigned IPAs
-        run: |
-          mkdir -p main-repo/public/feather main-repo/public/Ksign main-repo/public/esign
-          [ -f public/unsign/Feather.ipa ] && cp public/unsign/Feather.ipa main-repo/public/feather/Feather.ipa || true
-          [ -f public/unsign/Ksign.ipa ] && cp public/unsign/Ksign.ipa main-repo/public/Ksign/Ksign.ipa || true
-          [ -f public/unsign/ESign.ipa ] && cp public/unsign/ESign.ipa main-repo/public/esign/ESign.ipa || true
-          ls -l main-repo/public/feather main-repo/public/Ksign main-repo/public/esign
       - run: python3 -m signer sync
